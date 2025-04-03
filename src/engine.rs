@@ -116,6 +116,10 @@ pub fn run_game(rl: &mut RaylibHandle, thread: &RaylibThread) {
 
                 let mut tex_x = (wall_x * wall_texture.width() as f32) as i32;
 
+                if (hit.side == 0 && ray_dir.x > 0.0) || (hit.side == 1 && ray_dir.y < 0.0) {
+                    tex_x = wall_texture.width() - tex_x - 1;
+                }
+
                 // Draw Vertical Strip
                 d.draw_texture_pro(
                     &wall_texture,
