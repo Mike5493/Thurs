@@ -1,112 +1,110 @@
-use raylib::prelude::*;
-use crate::player::Player;
-use crate::map::{WORLD_MAP, MAP_WIDTH, MAP_HEIGHT};
-use crate::raycaster::cast_ray;
+//==========================================================================|
+//                 <|> ThursEngine ported to Rust <|>                       |
+//--------------------------------------------------------------------------|
+//  Author: Mikey                                                           |
+//  Date: 04/17/2025                                                        |
+//                                                                          |
+//==========================================================================|
 
-fn can_move(pos: Vector2) -> bool {
-    let x = pos.x as usize;
-    let y = pos.y as usize;
-    if x >= MAP_WIDTH || y >= MAP_HEIGHT {
-        return false;
-    }
-    WORLD_MAP[y][x] == 0
+use crate::map::{MAP_HEIGHT, MAP_WIDTH, WORLD_MAP};
+use crate::player::Player;
+use crate::raycaster::cast_ray;
+use raylib::prelude::*;
+
+fn collision_check(circle_pos: Vector2, radius: f32, rect: Rectangle) -> bool {
+    let closest_x = circle_pos.x.clamp(rect.x, rect.x + rect.width);
+    let closest_y = circle_pos.y.clamp(rect.y, rect.y + rect.height);
+
+    let dx = circle_pos.x - closest_x;
+    let dy = circle_pos.y - closest_y;
+
+    dx * dx + dy * dy < radius * radius
+}
+
+fn is_colliding(pos: Vector2, radius: f32) -> bool {
+    (0..MAP_HEIGHT).any(|y| {
+        (0..MAP_WIDTH).any(|x| {
+            WORLD_MAP[y][x] != 0
+                && collision_check(pos, radius, Rectangle::new(x as f32, y as f32, 1.0, 1.0))
+        })
+    })
 }
 
 pub fn run_game(rl: &mut RaylibHandle, thread: &RaylibThread) {
     let mut player = Player::new();
-
     let wall_texture = rl
-        .load_texture(&thread, "assets/wall.png")
-        .expect("Failed to load wall texture");
+        .load_texture(thread, "assets/wall.png")
+        .expect("Missing Texture");
+    wall_texture.set_texture_filter(thread, TextureFilter::TEXTURE_FILTER_POINT);
+
+    let ceiling_color = Color::new(20, 20, 30, 255);
+    let floor_color = Color::new(40, 30, 20, 255);
+
+    rl.set_target_fps(60);
+    rl.disable_cursor();
+
+    let (screen_w, screen_h) = (rl.get_screen_width(), rl.get_screen_height());
+    let projected_plane = screen_w as f32 / 2.0;
+    const MOUSE_SENSITIVITY: f32 = 0.005;
+    const COLLISION_RADIUS: f32 = 0.1;
 
     while !rl.window_should_close() {
         let forward = player.dir * player.move_speed;
         let strafe = Vector2::new(-player.dir.y, player.dir.x) * player.move_speed;
-        if rl.is_key_down(KeyboardKey::KEY_W) {
-            let next_x = player.pos + Vector2::new(forward.x, 0.0);
-            let next_y = player.pos + Vector2::new(0.0, forward.y);
 
-            if can_move(next_x) {
-                player.pos.x = next_x.x;
-            }
-            if can_move(next_y) {
-                player.pos.y = next_y.y;
-            }
-        }
+        // Movement
+        for key in [
+            (KeyboardKey::KEY_W, forward),
+            (KeyboardKey::KEY_S, -forward),
+            (KeyboardKey::KEY_A, strafe),
+            (KeyboardKey::KEY_D, -strafe),
+        ] {
+            if rl.is_key_down(key.0) {
+                let move_dir = key.1;
+                let try_pos = player.pos + move_dir;
 
-        if rl.is_key_down(KeyboardKey::KEY_S) {
-            let back = -forward;
-            let next_x = player.pos + Vector2::new(back.x, 0.0);
-            let next_y = player.pos + Vector2::new(0.0, back.y);
+                // Wall sliding
+                if !is_colliding(try_pos, COLLISION_RADIUS) {
+                    player.pos = try_pos;
+                } else {
+                    let x_only = Vector2::new(try_pos.x, player.pos.y);
+                    let y_only = Vector2::new(player.pos.x, try_pos.y);
 
-            if can_move(next_x) {
-                player.pos.x = next_x.x;
-            }
-            if can_move(next_y) {
-                player.pos.y = next_y.y;
-            }
-        }
-
-        if rl.is_key_down(KeyboardKey::KEY_A) {
-            let next_x = player.pos + Vector2::new(strafe.x, 0.0);
-            let next_y = player.pos + Vector2::new(0.0, strafe.y);
-
-            if can_move(next_x) {
-                player.pos.x = next_x.x;
-            }
-            if can_move(next_y) {
-                player.pos.y = next_y.y;
+                    if !is_colliding(try_pos, COLLISION_RADIUS) {
+                        player.pos.x = x_only.x;
+                    }
+                    if !is_colliding(y_only, COLLISION_RADIUS) {
+                        player.pos.y = y_only.y;
+                    }
+                }
             }
         }
 
-        if rl.is_key_down(KeyboardKey::KEY_D) {
-            let right = -strafe;
-            let next_x = player.pos + Vector2::new(right.x, 0.0);
-            let next_y = player.pos + Vector2::new(0.0, right.y);
-
-            if can_move(next_x) {
-                player.pos.x = next_x.x;
-            }
-            if can_move(next_y) {
-                player.pos.y = next_y.y;
-            }
-        }
-
-        // Mouse turning
+        // Rotation
         let delta_x = -rl.get_mouse_delta().x;
-        let rot = delta_x * 0.005;
-        rl.disable_cursor();
-
-        let cos = rot.cos();
-        let sin = rot.sin();
-
-        let old_dir_x = player.dir.x;
-        player.dir.x = player.dir.x * cos - player.dir.y * sin;
-        player.dir.y = old_dir_x * sin + player.dir.y * cos;
-
-        let old_plane_x = player.plane.x;
-        player.plane.x = player.plane.x * cos - player.plane.y * sin;
-        player.plane.y = old_plane_x * sin + player.plane.y * cos;
-
-        // Draw
-        let screen_width = rl.get_screen_width();
-        let screen_height = rl.get_screen_height();
+        player.rotate(delta_x * MOUSE_SENSITIVITY);
 
         let mut d = rl.begin_drawing(thread);
-        d.clear_background(Color::BLACK);
 
-        for x in 0..screen_width {
-            let camera_x = 2.0 * x as f32 / screen_width as f32 - 1.0;
+        d.clear_background(ceiling_color);
+        d.draw_rectangle(0, screen_h / 2, screen_w, screen_h / 2, floor_color);
+
+        for x in 0..screen_w {
+            let camera_x = 2.0 * x as f32 / screen_w as f32 - 1.0;
             let ray_dir = player.dir + player.plane * camera_x;
 
             if let Some(hit) = cast_ray(player.pos, ray_dir) {
-                let corrected_distance = hit.distance * (ray_dir.dot(player.dir)).abs();
-                let line_height = (screen_height as f32 / corrected_distance) as i32;
+                let _ray_dir_norm = ray_dir.normalized();
+                let cos_angle = _ray_dir_norm.dot(player.dir);
+                let corrected_dist = (hit.distance / cos_angle).max(0.2);
+                let wall_height = projected_plane / corrected_dist;
 
-                let draw_start = (screen_height / 2 - line_height / 2).max(0);
-                let draw_end = (screen_height / 2 + line_height / 2).min(screen_height);
+                let draw_start = (screen_h as f32 / 2.0 - wall_height / 2.0).max(0.0).floor();
+                let draw_end = (screen_h as f32 / 2.0 + wall_height / 2.0)
+                    .min(screen_h as f32)
+                    .ceil();
+                let height = draw_end - draw_start;
 
-                // Calculate x texture coord
                 let mut wall_x = if hit.side == 0 {
                     hit.hit_pos.y
                 } else {
@@ -114,13 +112,12 @@ pub fn run_game(rl: &mut RaylibHandle, thread: &RaylibThread) {
                 };
                 wall_x -= wall_x.floor();
 
-                let mut tex_x = (wall_x * wall_texture.width() as f32) as i32;
-
+                let mut tex_x = (wall_x * wall_texture.width() as f32).round() as i32;
                 if (hit.side == 0 && ray_dir.x > 0.0) || (hit.side == 1 && ray_dir.y < 0.0) {
                     tex_x = wall_texture.width() - tex_x - 1;
                 }
+                tex_x = tex_x.clamp(0, wall_texture.width() - 1);
 
-                // Draw Vertical Strip
                 d.draw_texture_pro(
                     &wall_texture,
                     Rectangle {
@@ -131,9 +128,9 @@ pub fn run_game(rl: &mut RaylibHandle, thread: &RaylibThread) {
                     },
                     Rectangle {
                         x: x as f32,
-                        y: draw_start as f32,
+                        y: draw_start,
                         width: 1.0,
-                        height: (draw_end - draw_start) as f32,
+                        height,
                     },
                     Vector2::zero(),
                     0.0,
