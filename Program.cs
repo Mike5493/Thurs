@@ -17,7 +17,7 @@ internal class Program
     private const int AngleSteps = 3600;
 
     private const int MapSize = 32;
-    private static readonly int[,] map = new int[MapSize, MapSize];
+    private static readonly int[,] Map = new int[MapSize, MapSize];
     private static readonly Random random = new();
 
     // =========================
@@ -26,25 +26,40 @@ internal class Program
     private static readonly double[] SinTable = new double[AngleSteps];
     private static readonly double[] CosTable = new double[AngleSteps];
     private static readonly (double rayDirX, double rayDirY)[] RayTable = new (double, double)[ScreenWidth];
-    private static readonly double[] wallDistances = new double[ScreenWidth / 2];
+    private static readonly double[] WallDistances = new double[ScreenWidth / 2];
 
     // Floor, ceiling, and texture rendering
-    private static readonly Color[] floorBuffer = new Color[ScreenWidth * ScreenHeight];
-    private static Color[]? flatFloorTexture;
-    private static readonly Color[]? ceilingTexture;
-    private static int ceilingWidth;
-    private static int ceilingHeight;
+    private static readonly Color[] FloorBuffer = new Color[ScreenWidth * ScreenHeight];
+    private static Color[]? FlatFloorTexture;
+    private static readonly Color[]? CeilingTexture;
+    private static int CeilingWidth;
+    private static int CeilingHeight;
     //=======================================
-    private static readonly double[] textureXOffsets = new double[ScreenWidth];
+    private static readonly double[] TextureXOffsets = new double[ScreenWidth];
     private static readonly double[] DeltaDistXs = new double[ScreenWidth];
     private static readonly double[] DeltaDistYs = new double[ScreenWidth];
     private static Texture2D bgTexture;
-    private static readonly float[] rowDistances = new float[ScreenHeight];
-    private static readonly float[] floorStepXs = new float[ScreenHeight];
-    private static readonly float[] floorStepYs = new float[ScreenHeight];
+    private static readonly float[] RowDistances = new float[ScreenHeight];
+    private static readonly float[] FloorStepXs = new float[ScreenHeight];
+    private static readonly float[] FloorStepYs = new float[ScreenHeight];
     //========================================
-    private static double lastPlayerX = -1, lastPlayerY = -1;
-    private static int lastAngleIdx = -1;
+    private static double LastPlayerX = -1, LastPlayerY = -1;
+    private static int LastAngleIdx = -1;
+
+    private struct Enemy
+    {
+        public double X, Y;
+        public double Speed;
+        public bool IsAlive;
+    }
+
+    private struct Projectile
+    {
+        public double X, Y;
+        public double DirX, DirY;
+        public double Speed;
+        public float Life;
+    }
 
     private static void InitTables(double dirX, double dirY, double planeX, double planeY)
     {
@@ -65,7 +80,7 @@ internal class Program
             double rayDirY = RayTable[x].rayDirY;
             double angle = Math.Atan2(rayDirY, rayDirX);
             if (angle < 0) angle += 2 * Math.PI;
-            textureXOffsets[x] = (angle / (2 * Math.PI)) * ceilingWidth;
+            TextureXOffsets[x] = (angle / (2 * Math.PI)) * CeilingWidth;
         }
 
         // Offset table
@@ -81,13 +96,13 @@ internal class Program
         double horizon = ScreenHeight / 2.0;
         for (int y = 0; y < ScreenHeight; y++)
         {
-            rowDistances[y] = y < horizon ? 0 : (float)(ScreenHeight / (2.0 * y - ScreenHeight));
+            RowDistances[y] = y < horizon ? 0 : (float)(ScreenHeight / (2.0 * y - ScreenHeight));
             if (y >= horizon)
             {
-                float rowDistance = rowDistances[y];
+                float rowDistance = RowDistances[y];
                 double stepFactor = rowDistance * 2.0 / ScreenWidth;
-                floorStepXs[y] = (float)(stepFactor * planeX);
-                floorStepYs[y] = (float)(stepFactor * planeY);
+                FloorStepXs[y] = (float)(stepFactor * planeX);
+                FloorStepYs[y] = (float)(stepFactor * planeY);
             }
         }
     }
@@ -109,7 +124,7 @@ internal class Program
             // Init interior
             for (int y = 1; y < MapSize - 1; y++)
                 for (int x = 1; x < MapSize - 1; x++)
-                    map[y, x] = random.NextDouble() < wallProbability ? 1 : 0;
+                    Map[y, x] = random.NextDouble() < wallProbability ? 1 : 0;
 
             // Smooth map with cellular automata
             for (int iteration = 0; iteration < smoothIter; iteration++)
@@ -125,27 +140,27 @@ internal class Program
                 // Update with smoothed version
                 for (int y = 1; y < MapSize - 1; y++)
                     for (int x = 1; x < MapSize - 1; x++)
-                        map[y, x] = nextMap[y, x];
+                        Map[y, x] = nextMap[y, x];
             }
 
             // Enclose map with walls
             for (int x = 0; x < MapSize; x++)
             {
-                map[0, x] = 1; // Top edge
-                map[MapSize - 1, x] = 1; // Bottom edge
+                Map[0, x] = 1; // Top edge
+                Map[MapSize - 1, x] = 1; // Bottom edge
             }
 
             for (int y = 0; y < MapSize; y++)
             {
-                map[y, 0] = 1; // Left edge
-                map[y, MapSize - 1] = 1; // Right Edge
+                Map[y, 0] = 1; // Left edge
+                Map[y, MapSize - 1] = 1; // Right Edge
             }
 
             // Ensure ample empty space
             int emptyCount = 0;
             for (int y = 0; y < MapSize; y++)
                 for (int x = 0; x < MapSize; x++)
-                    if (map[y, x] == 0)
+                    if (Map[y, x] == 0)
                         emptyCount++;
 
             double emptyRatio = (double)emptyCount / (MapSize * MapSize);
@@ -164,27 +179,11 @@ internal class Program
                 if (dx == 0 && dy == 0) continue;
                 int nx = x + dx;
                 int ny = y + dy;
-                if (nx is >= 0 and < MapSize && ny >= 0 && ny < MapSize && map[ny, nx] == 1)
+                if (nx is >= 0 and < MapSize && ny >= 0 && ny < MapSize && Map[ny, nx] == 1)
                     count++;
             }
 
         return count;
-    }
-
-
-    private struct Enemy
-    {
-        public double X, Y;
-        public double Speed;
-        public bool IsAlive;
-    }
-
-    private struct Projectile
-    {
-        public double X, Y;
-        public double DirX, DirY;
-        public double Speed;
-        public float Life;
     }
 
     private static void Main(string[] args)
@@ -204,7 +203,7 @@ internal class Program
         List<(int x, int y)> openCells = new();
         for (int y = 1; y < MapSize - 1; y++)
             for (int x = 1; x < MapSize - 1; x++)
-                if (map[y, x] == 0)
+                if (Map[y, x] == 0)
                     openCells.Add((x, y));
 
         // Shuffle and pick 20 unique open cells
@@ -254,8 +253,8 @@ internal class Program
         int textureWidth = floorImage.Width;
         int textureHeight = floorImage.Height;
 
-        flatFloorTexture = new Color[textureWidth * textureHeight];
-        Span<Color> floorTextureSpan = flatFloorTexture;
+        FlatFloorTexture = new Color[textureWidth * textureHeight];
+        Span<Color> floorTextureSpan = FlatFloorTexture;
         for (int y = 0; y < textureHeight; y++)
             for (int x = 0; x < textureWidth; x++)
                 floorTextureSpan[y * textureWidth + x] = Raylib.GetImageColor(floorImage, x, y);
@@ -266,13 +265,13 @@ internal class Program
         Raylib.UnloadImage(bgImage);
 
         var ceilingImage = Raylib.LoadImage(@"C:\Users\Mikey\source\repos\Thurs\Assets\nightSky.png");
-        ceilingWidth = ceilingImage.Width;
-        ceilingHeight = ceilingImage.Height;
-        Color[] ceilingTexture = new Color[ceilingWidth * ceilingHeight];
+        CeilingWidth = ceilingImage.Width;
+        CeilingHeight = ceilingImage.Height;
+        Color[] ceilingTexture = new Color[CeilingWidth * CeilingHeight];
         Span<Color> ceilingTextureSpan = ceilingTexture;
-        for (int y = 0; y < ceilingHeight; y++)
-            for (int x = 0; x < ceilingWidth; x++)
-                ceilingTextureSpan[y * ceilingWidth + x] = Raylib.GetImageColor(ceilingImage, x, y);
+        for (int y = 0; y < CeilingHeight; y++)
+            for (int x = 0; x < CeilingWidth; x++)
+                ceilingTextureSpan[y * CeilingWidth + x] = Raylib.GetImageColor(ceilingImage, x, y);
         Raylib.UnloadImage(ceilingImage);
 
         InitTables(dirX, dirY, planeX, planeY);
@@ -331,7 +330,7 @@ internal class Program
             }
 
             // Collision detection
-            const double collisionRadius = 0.4;
+            const double collisionRadius = 0.1;
             double newX = playerX + moveX;
             double newY = playerY + moveY;
 
@@ -339,7 +338,7 @@ internal class Program
             {
                 int ix = (int)x;
                 int iy = (int)y;
-                return map[iy, ix] == 0;
+                return Map[iy, ix] == 0;
             }
 
             // X check
@@ -410,7 +409,7 @@ internal class Program
                 // Clean up if out of bounds, wall is hit, or expired
                 int px = (int)p.X;
                 int py = (int)p.Y;
-                if (p.Life <= 0 || px < 0 || py < 0 || px >= MapSize || py >= MapSize || map[py, px] == 1)
+                if (p.Life <= 0 || px < 0 || py < 0 || px >= MapSize || py >= MapSize || Map[py, px] == 1)
                     projectiles.RemoveAt(i);
                 continue;
             }
@@ -434,7 +433,7 @@ internal class Program
                     double eMoveX = dx / distance * enemy.Speed;
                     double eMoveY = dy / distance * enemy.Speed;
                     // Allow movement only in open cell
-                    if (map[(int)(enemy.Y + eMoveY), (int)(enemy.X + eMoveX)] == 0)
+                    if (Map[(int)(enemy.Y + eMoveY), (int)(enemy.X + eMoveX)] == 0)
                     {
                         enemy.X += eMoveX;
                         enemy.Y += eMoveY;
@@ -456,39 +455,39 @@ internal class Program
                 }
             }
 
-            if (playerX != lastPlayerX || playerY != lastPlayerY || angleIdx != lastAngleIdx)
+            if (playerX != LastPlayerX || playerY != LastPlayerY || angleIdx != LastAngleIdx)
             {
                 Raylib.BeginDrawing();
                 Raylib.ClearBackground(Color.Black);
 
-                Span<Color> floorSpan = floorBuffer;
+                Span<Color> floorSpan = FloorBuffer;
 
                 double horizon = ScreenHeight / 2.0;
 
                 for (int y = 0; y < horizon; y++)
                 {
-                    double textureY = (y / horizon) * ceilingHeight;
-                    textureY = Math.Clamp(textureY, 0, ceilingHeight - 1);
+                    double textureY = (y / horizon) * CeilingHeight;
+                    textureY = Math.Clamp(textureY, 0, CeilingHeight - 1);
                     int texY = (int)textureY;
 
                     for (int x = 0; x < ScreenWidth; x++)
                     {
-                        double textureX = textureXOffsets[x];
-                        textureX %= ceilingWidth;
-                        if (textureX < 0) textureX += ceilingWidth;
+                        double textureX = TextureXOffsets[x];
+                        textureX %= CeilingWidth;
+                        if (textureX < 0) textureX += CeilingWidth;
                         int texX = (int)textureX;
-                        if (ceilingTexture != null && texY >= 0 && texY < ceilingHeight && texX >= 0 && texX < ceilingHeight)
+                        if (ceilingTexture != null && texY >= 0 && texY < CeilingHeight && texX >= 0 && texX < CeilingHeight)
                         {
-                            floorSpan[y * ScreenWidth + x] = ceilingTexture[texY * ceilingWidth + texX];
+                            floorSpan[y * ScreenWidth + x] = ceilingTexture[texY * CeilingWidth + texX];
                         }
                     }
                 }
 
                 for (int y = (int)horizon; y < ScreenHeight; y++)
                 {
-                    float rowDistance = rowDistances[y];
-                    float floorStepX = floorStepXs[y];
-                    float floorStepY = floorStepYs[y];
+                    float rowDistance = RowDistances[y];
+                    float floorStepX = FloorStepXs[y];
+                    float floorStepY = FloorStepYs[y];
                     double floorX = playerX + rowDistance * (dirX - planeX);
                     double floorY = playerY + rowDistance * (dirY - planeY);
 
@@ -506,14 +505,14 @@ internal class Program
 
                 unsafe
                 {
-                    fixed (Color* ptr = floorBuffer)
+                    fixed (Color* ptr = FloorBuffer)
                     {
                         Raylib.UpdateTexture(bgTexture, ptr);
                     }
                 }
-                lastPlayerX = playerX;
-                lastPlayerY = playerY;
-                lastAngleIdx = angleIdx;
+                LastPlayerX = playerX;
+                LastPlayerY = playerY;
+                LastAngleIdx = angleIdx;
             }
             Raylib.DrawTexture(bgTexture, 0, 0, Color.White);
 
@@ -572,7 +571,7 @@ internal class Program
                         side = 1;
                     }
 
-                    if (map[mapY, mapX] == 1) hit = true;
+                    if (Map[mapY, mapX] == 1) hit = true;
                 }
 
                 // Fish eye correction
@@ -604,7 +603,7 @@ internal class Program
                 if ((side == 0 && rayDirX > 0) || (side == 1 && rayDirY < 0))
                     texWallX = wallTexture.Width - texWallX - 1;
                 texWallX = Math.Clamp(texWallX, 0, wallTexture.Width - 1);
-                wallDistances[x / 2] = t;
+                WallDistances[x / 2] = t;
 
                 /*switch (side)
                 {
@@ -647,7 +646,7 @@ internal class Program
                     if (screenX >= 0 && screenX < ScreenWidth)
                     {
                         int rayIndex = screenX / 2;
-                        if (transformY < wallDistances[rayIndex])
+                        if (transformY < WallDistances[rayIndex])
                         {
                             int enemySize = (int)(ScreenHeight / transformY * 0.2);
                             if (enemySize < 5) enemySize = 5;
