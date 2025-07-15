@@ -26,14 +26,25 @@ internal class Program
     private static readonly double[] SinTable = new double[AngleSteps];
     private static readonly double[] CosTable = new double[AngleSteps];
     private static readonly (double rayDirX, double rayDirY)[] RayTable = new (double, double)[ScreenWidth];
+    private static readonly double[] wallDistances = new double[ScreenWidth / 2];
 
-    // Floor and texture rendering
+    // Floor, ceiling, and texture rendering
     private static readonly Color[] floorBuffer = new Color[ScreenWidth * ScreenHeight];
     private static Color[]? flatFloorTexture;
+    private static readonly Color[]? ceilingTexture;
+    private static int ceilingWidth;
+    private static int ceilingHeight;
+    //=======================================
+    private static readonly double[] textureXOffsets = new double[ScreenWidth];
+    private static readonly double[] DeltaDistXs = new double[ScreenWidth];
+    private static readonly double[] DeltaDistYs = new double[ScreenWidth];
     private static Texture2D bgTexture;
     private static readonly float[] rowDistances = new float[ScreenHeight];
     private static readonly float[] floorStepXs = new float[ScreenHeight];
     private static readonly float[] floorStepYs = new float[ScreenHeight];
+    //========================================
+    private static double lastPlayerX = -1, lastPlayerY = -1;
+    private static int lastAngleIdx = -1;
 
     private static void InitTables(double dirX, double dirY, double planeX, double planeY)
     {
@@ -50,6 +61,20 @@ internal class Program
         {
             double cameraX = 2.0 * x / ScreenWidth - 1.0;
             RayTable[x] = (dirX + planeX * cameraX, dirY + planeY * cameraX);
+            double rayDirX = RayTable[x].rayDirX;
+            double rayDirY = RayTable[x].rayDirY;
+            double angle = Math.Atan2(rayDirY, rayDirX);
+            if (angle < 0) angle += 2 * Math.PI;
+            textureXOffsets[x] = (angle / (2 * Math.PI)) * ceilingWidth;
+        }
+
+        // Offset table
+        for (int x = 0; x < ScreenWidth; x++)
+        {
+            double rayDirX = RayTable[x].rayDirX;
+            double rayDirY = RayTable[x].rayDirY;
+            DeltaDistXs[x] = Math.Abs(1 / rayDirX);
+            DeltaDistYs[x] = Math.Abs(1 / rayDirY);
         }
 
         // Precompute row distances and steps to reduce per-frame computation
@@ -79,7 +104,7 @@ internal class Program
             const double wallProbability = 0.5; // Percent chance cell starts as wall
             const int smoothIter = 3; // Number of smoothing passes
             const int wallThreshold = 4; // Becomes wall if more than 4 neighbors are walls, etc..
-            const double minEmptySpaceRatio = 0.1; // 30% empty space
+            const double minEmptySpaceRatio = 0.3; // 30% empty space
 
             // Init interior
             for (int y = 1; y < MapSize - 1; y++)
@@ -146,6 +171,7 @@ internal class Program
         return count;
     }
 
+
     private struct Enemy
     {
         public double X, Y;
@@ -182,7 +208,7 @@ internal class Program
                     openCells.Add((x, y));
 
         // Shuffle and pick 20 unique open cells
-        for (int i = 0; i < 10 && openCells.Count > 0; i++)
+        for (int i = 0; i < 5 && openCells.Count > 0; i++)
         {
             int idx = random.Next(openCells.Count);
             (int x, int y) = openCells[idx];
@@ -221,7 +247,6 @@ internal class Program
         Raylib.SetTargetFPS(60);
         Raylib.DisableCursor();
 
-
         Texture2D wallTexture = Raylib.LoadTexture(@"C:\Users\Mikey\source\repos\Thurs\Assets\dampFloor.png");
         Raylib.SetTextureFilter(wallTexture, TextureFilter.Bilinear);
 
@@ -240,6 +265,16 @@ internal class Program
         bgTexture = Raylib.LoadTextureFromImage(bgImage);
         Raylib.UnloadImage(bgImage);
 
+        var ceilingImage = Raylib.LoadImage(@"C:\Users\Mikey\source\repos\Thurs\Assets\nightSky.png");
+        ceilingWidth = ceilingImage.Width;
+        ceilingHeight = ceilingImage.Height;
+        Color[] ceilingTexture = new Color[ceilingWidth * ceilingHeight];
+        Span<Color> ceilingTextureSpan = ceilingTexture;
+        for (int y = 0; y < ceilingHeight; y++)
+            for (int x = 0; x < ceilingWidth; x++)
+                ceilingTextureSpan[y * ceilingWidth + x] = Raylib.GetImageColor(ceilingImage, x, y);
+        Raylib.UnloadImage(ceilingImage);
+
         InitTables(dirX, dirY, planeX, planeY);
 
         Color ambientColor = new(30, 30, 30, 255);
@@ -250,6 +285,8 @@ internal class Program
         float fogEnd = 20.0f;
 
         Color finalTint = Color.Black;
+
+
 
         // ===================
         // MAIN LOOP
@@ -285,6 +322,12 @@ internal class Program
             {
                 moveX -= dirY * currentMoveSpeed;
                 moveY += dirX * currentMoveSpeed;
+            }
+
+            if (Raylib.IsKeyDown(KeyboardKey.M))
+            {
+                Raylib.EnableCursor();
+
             }
 
             // Collision detection
@@ -335,6 +378,8 @@ internal class Program
             planeX = -dirY * 0.66;
             planeY = dirX * 0.66;
 
+            InitTables(dirX, dirY, planeX, planeY);
+
             // =================
             // Shooting implementation
             // =================
@@ -367,7 +412,7 @@ internal class Program
                 int py = (int)p.Y;
                 if (p.Life <= 0 || px < 0 || py < 0 || px >= MapSize || py >= MapSize || map[py, px] == 1)
                     projectiles.RemoveAt(i);
-                    continue;
+                continue;
             }
 
             // ========================
@@ -411,48 +456,65 @@ internal class Program
                 }
             }
 
-            InitTables(dirX, dirY, planeX, planeY);
-
-            Raylib.BeginDrawing();
-            Raylib.ClearBackground(Color.Black);
-
-            Color ceilingColor = new(15, 15, 15, 255);
-            double horizon = ScreenHeight / 2.0;
-
-            Span<Color> floorSpan = floorBuffer;
-
-            for (int y = 0; y < ScreenHeight / 2; y++)
-                for (int x = 0; x < ScreenWidth; x++)
-                    floorSpan[y * ScreenWidth + x] = ceilingColor;
-
-            for (int y = (int)horizon; y < ScreenHeight; y++)
+            if (playerX != lastPlayerX || playerY != lastPlayerY || angleIdx != lastAngleIdx)
             {
-                float rowDistance = rowDistances[y];
-                float floorStepX = floorStepXs[y];
-                float floorStepY = floorStepYs[y];
-                double floorX = playerX + rowDistance * (dirX - planeX);
-                double floorY = playerY + rowDistance * (dirY - planeY);
+                Raylib.BeginDrawing();
+                Raylib.ClearBackground(Color.Black);
 
-                for (int x = 0; x < ScreenWidth; x++)
+                Span<Color> floorSpan = floorBuffer;
+
+                double horizon = ScreenHeight / 2.0;
+
+                for (int y = 0; y < horizon; y++)
                 {
-                    int texX = (int)(floorX * textureWidth) % textureWidth;
-                    texX = (texX + textureWidth) % textureWidth;
-                    int texY = (int)(floorY * textureHeight) % textureHeight;
-                    texY = (texY + textureHeight) % textureHeight;
-                    floorSpan[y * ScreenWidth + x] = floorTextureSpan[texY * textureWidth + texX];
-                    floorX += floorStepX;
-                    floorY += floorStepY;
-                }
-            }
+                    double textureY = (y / horizon) * ceilingHeight;
+                    textureY = Math.Clamp(textureY, 0, ceilingHeight - 1);
+                    int texY = (int)textureY;
 
-            unsafe
-            {
-                fixed (Color* ptr = floorBuffer)
+                    for (int x = 0; x < ScreenWidth; x++)
+                    {
+                        double textureX = textureXOffsets[x];
+                        textureX %= ceilingWidth;
+                        if (textureX < 0) textureX += ceilingWidth;
+                        int texX = (int)textureX;
+                        if (ceilingTexture != null && texY >= 0 && texY < ceilingHeight && texX >= 0 && texX < ceilingHeight)
+                        {
+                            floorSpan[y * ScreenWidth + x] = ceilingTexture[texY * ceilingWidth + texX];
+                        }
+                    }
+                }
+
+                for (int y = (int)horizon; y < ScreenHeight; y++)
                 {
-                    Raylib.UpdateTexture(bgTexture, ptr);
-                }
-            }
+                    float rowDistance = rowDistances[y];
+                    float floorStepX = floorStepXs[y];
+                    float floorStepY = floorStepYs[y];
+                    double floorX = playerX + rowDistance * (dirX - planeX);
+                    double floorY = playerY + rowDistance * (dirY - planeY);
 
+                    for (int x = 0; x < ScreenWidth; x++)
+                    {
+                        int texX = (int)(floorX * textureWidth) % textureWidth;
+                        texX = (texX + textureWidth) % textureWidth;
+                        int texY = (int)(floorY * textureHeight) % textureHeight;
+                        texY = (texY + textureHeight) % textureHeight;
+                        floorSpan[y * ScreenWidth + x] = floorTextureSpan[texY * textureWidth + texX];
+                        floorX += floorStepX;
+                        floorY += floorStepY;
+                    }
+                }
+
+                unsafe
+                {
+                    fixed (Color* ptr = floorBuffer)
+                    {
+                        Raylib.UpdateTexture(bgTexture, ptr);
+                    }
+                }
+                lastPlayerX = playerX;
+                lastPlayerY = playerY;
+                lastAngleIdx = angleIdx;
+            }
             Raylib.DrawTexture(bgTexture, 0, 0, Color.White);
 
             //var floorColor = new Color(25, 25, 25, 255);
@@ -461,7 +523,7 @@ internal class Program
             double invDet = 1.0 / (planeX * dirY - planeY * dirX);
 
             // Raycasting loop
-            for (int x = 0; x < ScreenWidth; x++)
+            for (int x = 0; x < ScreenWidth; x += 2)
             {
                 double rayDirX = RayTable[x].rayDirX;
                 double rayDirY = RayTable[x].rayDirY;
@@ -469,8 +531,8 @@ internal class Program
                 int mapX = (int)playerX;
                 int mapY = (int)playerY;
                 double sideDistX, sideDistY;
-                double deltaDistX = Math.Abs(1 / rayDirX);
-                double deltaDistY = Math.Abs(1 / rayDirY);
+                double deltaDistX = DeltaDistXs[x];
+                double deltaDistY = DeltaDistYs[x];
                 int stepX, stepY;
                 bool hit = false;
                 int side = 0;
@@ -542,6 +604,7 @@ internal class Program
                 if ((side == 0 && rayDirX > 0) || (side == 1 && rayDirY < 0))
                     texWallX = wallTexture.Width - texWallX - 1;
                 texWallX = Math.Clamp(texWallX, 0, wallTexture.Width - 1);
+                wallDistances[x / 2] = t;
 
                 /*switch (side)
                 {
@@ -567,7 +630,7 @@ internal class Program
                 finalTint.B = (byte)((1.0f - fogFactor) * finalTint.B + fogFactor * fogColor.B);
 
                 Rectangle sourceRec = new(texWallX, 0, 1, wallTexture.Height);
-                Rectangle destRec = new(x, drawStart, 1, drawEnd - drawStart);
+                Rectangle destRec = new(x, drawStart, 2, drawEnd - drawStart);
                 Raylib.DrawTexturePro(wallTexture, sourceRec, destRec, new Vector2(0, 0), 0, finalTint);
             }
 
@@ -575,21 +638,29 @@ internal class Program
             {
                 double dx = enemy.X - playerX;
                 double dy = enemy.Y - playerY;
-
                 double transformX = invDet * (dirY * dx - dirX * dy);
                 double transformY = invDet * (-planeY * dx + planeX * dy);
 
                 if (transformY > 0)
-                {
-                    int enemySize = (int)(ScreenHeight / transformY * 0.2);
-                    if (enemySize < 5) enemySize = 5;
+                { // Enemy in front of player
                     int screenX = (int)(640d * (1 + transformX / transformY));
-                    int screenY = ScreenHeight / 2 + enemySize / 2;
+                    if (screenX >= 0 && screenX < ScreenWidth)
+                    {
+                        int rayIndex = screenX / 2;
+                        if (transformY < wallDistances[rayIndex])
+                        {
+                            int enemySize = (int)(ScreenHeight / transformY * 0.2);
+                            if (enemySize < 5) enemySize = 5;
+                            int screenY = ScreenHeight / 2 + enemySize / 2;
+                            Raylib.DrawRectangle(screenX - enemySize / 2, screenY - enemySize / 2, enemySize, enemySize,
+                                Color.Red);
 
-                    Raylib.DrawRectangle(screenX - enemySize / 2, screenY - enemySize / 2, enemySize, enemySize,
-                        Color.Red);
+                        }
+                    }
                 }
+
             }
+
 
             foreach (Projectile p in projectiles)
             {
