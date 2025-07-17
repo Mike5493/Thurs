@@ -38,7 +38,8 @@ internal class Program
     private static readonly double[] TextureXOffsets = new double[ScreenWidth];
     private static readonly double[] DeltaDistXs = new double[ScreenWidth];
     private static readonly double[] DeltaDistYs = new double[ScreenWidth];
-    private static Texture2D bgTexture;
+    private static Texture2D BgTexture;
+    private static Texture2D GrassTexture;
     private static readonly float[] RowDistances = new float[ScreenHeight];
     private static readonly float[] FloorStepXs = new float[ScreenHeight];
     private static readonly float[] FloorStepYs = new float[ScreenHeight];
@@ -60,6 +61,12 @@ internal class Program
         public double Speed;
         public float Life;
     }
+
+    private struct Grass
+    {
+        public double X, Y;
+    }
+    private static List<Grass> grasses = new List<Grass>();
 
     private static void InitTables(double dirX, double dirY, double planeX, double planeY)
     {
@@ -116,9 +123,9 @@ internal class Program
     {
         while (true)
         {
-            const double wallProbability = 0.5; // Percent chance cell starts as wall
-            const int smoothIter = 3; // Number of smoothing passes
-            const int wallThreshold = 4; // Becomes wall if more than 4 neighbors are walls, etc..
+            const double wallProbability = 0.5;       // Percent chance cell starts as wall
+            const int smoothIter = 3;                // Number of smoothing passes
+            const int wallThreshold = 4;            // Becomes wall if more than 4 neighbors are walls, etc..
             const double minEmptySpaceRatio = 0.3; // 30% empty space
 
             // Init interior
@@ -189,6 +196,18 @@ internal class Program
     private static void Main(string[] args)
     {
         GenerateRandomMap();
+
+        // Billboard population
+        for (int y = 0; y < MapSize; y++)
+            for (int x = 0; x < MapSize; x++)
+            {
+                if (Map[y, x] == 0 && random.NextDouble() < 0.1)
+                {
+                    double posX = x + random.NextDouble();
+                    double posY = y + random.NextDouble();
+                    grasses.Add(new Grass { X = posX, Y = posY });
+                }
+            }
 
         // Player Variables
         double playerX = 8.5;
@@ -261,7 +280,7 @@ internal class Program
         Raylib.UnloadImage(floorImage);
 
         Image bgImage = Raylib.GenImageColor(ScreenWidth, ScreenHeight, Color.Black);
-        bgTexture = Raylib.LoadTextureFromImage(bgImage);
+        BgTexture = Raylib.LoadTextureFromImage(bgImage);
         Raylib.UnloadImage(bgImage);
 
         var ceilingImage = Raylib.LoadImage(@"C:\Users\Mikey\source\repos\Thurs\Assets\nightSky.png");
@@ -273,6 +292,9 @@ internal class Program
             for (int x = 0; x < CeilingWidth; x++)
                 ceilingTextureSpan[y * CeilingWidth + x] = Raylib.GetImageColor(ceilingImage, x, y);
         Raylib.UnloadImage(ceilingImage);
+
+        GrassTexture = Raylib.LoadTexture(@"C:\Users\Mikey\source\repos\Thurs\Assets\grassBillboard.png");
+        Raylib.SetTextureFilter(GrassTexture, TextureFilter.Bilinear);
 
         InitTables(dirX, dirY, planeX, planeY);
 
@@ -507,14 +529,14 @@ internal class Program
                 {
                     fixed (Color* ptr = FloorBuffer)
                     {
-                        Raylib.UpdateTexture(bgTexture, ptr);
+                        Raylib.UpdateTexture(BgTexture, ptr);
                     }
                 }
                 LastPlayerX = playerX;
                 LastPlayerY = playerY;
                 LastAngleIdx = angleIdx;
             }
-            Raylib.DrawTexture(bgTexture, 0, 0, Color.White);
+            Raylib.DrawTexture(BgTexture, 0, 0, Color.White);
 
             //var floorColor = new Color(25, 25, 25, 255);
             //const double sigma = 8.0;
@@ -605,14 +627,6 @@ internal class Program
                 texWallX = Math.Clamp(texWallX, 0, wallTexture.Width - 1);
                 WallDistances[x / 2] = t;
 
-                /*switch (side)
-                {
-                    case 0 when rayDirX > 0:
-                    case 1 when rayDirY < 0:
-                        texWallX = wallTexture.Width - texWallX - 1;
-                        break;
-                }*/
-
                 // Dynamic lighting
                 float lightIntensity = Vector3.Dot(lightDir, new Vector3(side == 0 ? 1 : 0, 0, side == 1 ? 1 : 0));
                 lightIntensity = Math.Max(0, lightIntensity);
@@ -631,6 +645,59 @@ internal class Program
                 Rectangle sourceRec = new(texWallX, 0, 1, wallTexture.Height);
                 Rectangle destRec = new(x, drawStart, 2, drawEnd - drawStart);
                 Raylib.DrawTexturePro(wallTexture, sourceRec, destRec, new Vector2(0, 0), 0, finalTint);
+            }
+
+            // Render Grass
+            const double grassScale = 0.4;
+            float aspectRatio = (float)GrassTexture.Width / GrassTexture.Height;
+            Span<Grass> grassesSpan = CollectionsMarshal.AsSpan(grasses);
+            for (int i = 0; i < grassesSpan.Length; i++)
+            {
+                ref Grass grass = ref grassesSpan[i];
+                double dx = grass.X - playerX;
+                double dy = grass.Y - playerY;
+                double transformX = invDet * (dirY * dx - dirX * dy);
+                double transformY = invDet * (-planeY * dx + planeX * dy);
+                if (transformY > 0 && transformY < fogEnd)
+                {
+                    int screenX = (int)(ScreenWidth / 2.0 * (1 + transformX / transformY));
+                    if (screenX >= 0 && screenX < ScreenWidth)
+                    {
+                        int rayIndex = screenX / 2;
+                        if (transformY < WallDistances[rayIndex])
+                        {
+                            int grassHeight = (int)(ScreenHeight / transformY * grassScale);
+                            int grassWidth = (int)(grassHeight * aspectRatio);
+                            double yBase = ScreenHeight / 2.0 + ScreenHeight / (2.0 * transformY);
+                            int yBaseClamped = (int)Math.Min(yBase, ScreenHeight - 1);
+                            int screenY = yBaseClamped - grassHeight;
+
+                            Rectangle sourceRec;
+                            Rectangle destRec;
+                            if (screenY < 0)
+                            {
+                                float clippedHeight = grassHeight + screenY;
+                                float sourceYStart = (float)(-screenY) / grassHeight * GrassTexture.Height;
+                                sourceRec = new Rectangle(0, sourceYStart, GrassTexture.Width, clippedHeight / grassHeight * GrassTexture.Height);
+                                destRec = new Rectangle(screenX - grassWidth / 2, 0, grassWidth, clippedHeight);
+                            } else
+                            {
+                                sourceRec = new Rectangle(0, 0, GrassTexture.Width, GrassTexture.Height);
+                                destRec = new Rectangle(screenX - grassWidth / 2, screenY, grassWidth, grassHeight);
+                            }
+
+                            double fogFactor = Math.Clamp((transformY - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
+                            Color grassTint = new Color(
+                                (byte)(255 * (1 - fogFactor)),
+                                (byte)(255 * (1 - fogFactor)),
+                                (byte)(255 * (1 - fogFactor)),
+                                (byte)255
+                            );
+                            Raylib.DrawTexturePro(GrassTexture, sourceRec, destRec, new Vector2(0, 0), 0, grassTint); ;
+                            //Raylib.DrawLine(screenX, yBaseClamped, screenX, yBaseClamped - 10, Color.Red);
+                        }
+                    }
+                }
             }
 
             foreach (Enemy enemy in enemies.Where(e => e.IsAlive))
@@ -686,7 +753,8 @@ internal class Program
         }
 
         Raylib.UnloadTexture(wallTexture);
-        Raylib.UnloadTexture(bgTexture);
+        Raylib.UnloadTexture(BgTexture);
+        Raylib.UnloadTexture(GrassTexture);
         Raylib.CloseWindow();
     }
 
